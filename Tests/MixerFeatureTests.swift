@@ -1292,7 +1292,86 @@ enum MixerFeatureTests {
         suite.expect(MixerRender.sourceChannel(for: 2, sourceChannels: 2) == nil,
                "channels the tap cannot fill stay silent")
         suite.expect(MixerRender.sourceChannel(for: 1, sourceChannels: 1) == 0,
-               "a single channel is copied to the right as well as the left")
+               "a single channel is copied to the right as well as to the left")
 
+        // MARK: Output slider count and assignment
+        let sliders = MixerRoutingSupport.MixerOutputSliders.self
+
+        // The count the mixer has always had, and anything below it.
+        suite.expect(sliders.sanitizedCount(1, maximumCount: 6) == 1,
+               "one slider is what the mixer has always shown")
+        suite.expect(sliders.sanitizedCount(0, maximumCount: 6) == 1,
+               "a stored zero cannot take the volume control away")
+        suite.expect(sliders.sanitizedCount(-4, maximumCount: 6) == 1,
+               "a negative stored count reads as one")
+
+        // The ceiling wins over the stored count, in both directions.
+        suite.expect(sliders.sanitizedCount(9, maximumCount: 3) == 3,
+               "more sliders than the screen fits are capped, not refused")
+        suite.expect(sliders.sanitizedCount(2, maximumCount: 0) == 1,
+               "a screen measured as fitting nothing still keeps the one slider")
+
+        // The count the screen allows grows with the space and never past the
+        // hard ceiling, however tall the display reports.
+        let tall = sliders.maximumCount(screenHeight: 1600, reservedHeight: 430)
+        let short = sliders.maximumCount(screenHeight: 600, reservedHeight: 430)
+        suite.expect(tall > short,
+               "a taller screen offers more sliders (\(tall) vs \(short))")
+        suite.expect(sliders.maximumCount(screenHeight: 1600, reservedHeight: 430)
+            <= sliders.hardMaximumCount,
+               "the ceiling holds however much room there is")
+        suite.expect(sliders.maximumCount(screenHeight: 0, reservedHeight: 430)
+            == sliders.hardMaximumCount,
+               "an unmeasurable screen falls back to the hard ceiling")
+        suite.expect(sliders.maximumCount(screenHeight: 300, reservedHeight: 430) >= 1,
+               "a screen too short for a row still gets the one slider it always had")
+
+        // Each row keeps its own output, and the rows are read independently.
+        let resolved = sliders.resolvedDeviceUIDs(storedUIDs: [1: "speakers"],
+                                                   count: 3,
+                                                   availableUIDs: ["speakers", "headphones"],
+                                                   defaultUID: "built-in")
+        suite.expect(resolved.count == 3,
+               "the resolved assignment always has one entry per row")
+        suite.expect(resolved[0] == nil,
+               "a row never assigned follows the system default")
+        suite.expect(resolved[1] == "speakers",
+               "a row keeps the output it was given")
+        suite.expect(resolved[2] == nil,
+               "the third row is its own default until it is set")
+
+        // A device that has gone must not take the row with it.
+        let missing = sliders.resolvedDeviceUIDs(storedUIDs: [1: "unplugged"],
+                                                  count: 2,
+                                                  availableUIDs: ["speakers"],
+                                                  defaultUID: "built-in")
+        suite.expect(missing[1] == nil,
+               "a row whose device has gone falls back to the default instead of disappearing")
+
+        // Storing what the user set: junk keys, rows past the count and empty
+        // UIDs are dropped, and the valid ones survive.
+        let stored = sliders.sanitizedStoredUIDs(["0": "speakers",
+                                                  "1": "headphones",
+                                                  "5": "extra",
+                                                  "-2": "negative",
+                                                  "bad": "nokey",
+                                                  "2": "  padded  "],
+                                                 count: 3)
+        suite.expect(stored == [0: "speakers", 1: "headphones", 2: "padded"],
+               "only rows inside the count with a usable UID are kept, got \(stored)")
+
+        // Shrinking the count and growing it back must not resurrect a routing
+        // the user could no longer see.
+        let trimmed = sliders.sanitizedStoredUIDs(["0": "speakers", "1": "headphones"],
+                                                  count: 1)
+        suite.expect(trimmed == [0: "speakers"],
+               "a row past the count is dropped when the count shrinks")
+
+        // The whole range the panel offers has to be representable.
+        for count in sliders.minimumCount...sliders.hardMaximumCount {
+            suite.expect(sliders.sanitizedCount(count,
+                                                 maximumCount: sliders.hardMaximumCount) == count,
+                   "a count inside the range is kept as asked (\(count))")
+        }
     }
 }

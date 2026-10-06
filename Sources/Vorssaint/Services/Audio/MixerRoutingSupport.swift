@@ -608,6 +608,77 @@ enum MixerRoutingSupport {
         return nil
     }
 
+    /// How many system volume sliders the mixer may show, and which output each
+    /// one drives. Kept apart from the mixer itself so the sizing and the
+    /// mapping are decided as plain values, testable without audio hardware.
+    enum MixerOutputSliders {
+        /// One slider is what the mixer has always shown.
+        static let minimumCount = 1
+        /// Absolute ceiling for the stored preference. The reachable ceiling
+        /// is lower on a short screen (see `maximumCount(screenHeight:)`); this
+        /// only keeps a hand-edited or restored preference from putting a
+        /// hundred rows in the panel.
+        static let hardMaximumCount = 12
+
+        /// Vertical space one slider row needs: the picker line above the
+        /// slider, the same leading the single-output row already uses.
+        static let rowHeight: CGFloat = 44
+
+        /// Space the mixer's other rows and chrome take before the sliders.
+        /// The panel's own estimates are the budget's starting point; what is
+        /// left is what sliders can have without pushing the panel past the
+        /// screen.
+        static func maximumCount(screenHeight: CGFloat, reservedHeight: CGFloat) -> Int {
+            guard screenHeight > 0 else { return hardMaximumCount }
+            // Never below one: a screen too short for even one row still gets
+            // the single slider the mixer has always had, and the panel
+            // scrolls.
+            let available = max(rowHeight, screenHeight - reservedHeight)
+            return min(hardMaximumCount, max(minimumCount, Int(available / rowHeight)))
+        }
+
+        /// The stored count, held between one and whatever this screen allows.
+        /// An absent or malformed value reads as one, so a preference written
+        /// by a newer build (or by hand) cannot leave the mixer with no
+        /// volume control at all.
+        static func sanitizedCount(_ value: Int, maximumCount: Int) -> Int {
+            let ceiling = max(minimumCount, min(hardMaximumCount, maximumCount))
+            return min(max(value, minimumCount), ceiling)
+        }
+
+        /// The output each row drives, in row order, always `count` long.
+        ///
+        /// A row the user never assigned, or whose device has since gone,
+        /// falls back to the system default rather than vanishing: a slider
+        /// that disappears with the device takes the volume control with it.
+        static func resolvedDeviceUIDs(storedUIDs: [Int: String],
+                                       count: Int,
+                                       availableUIDs: Set<String>,
+                                       defaultUID: String?) -> [String?] {
+            (0..<max(minimumCount, count)).map { index in
+                guard let uid = storedUIDs[index],
+                      availableUIDs.contains(uid) else { return nil }
+                return uid
+            }
+        }
+
+        /// Stores the per-row assignment. A row set back to the default clears
+        /// its entry rather than writing the default's UID, so the system
+        /// changing its default later keeps changing what the row plays.
+        /// Rows outside the current count are dropped: shrinking the count and
+        /// growing it back should not resurrect a stale routing the user can
+        /// no longer see.
+        static func sanitizedStoredUIDs(_ raw: [String: Any], count: Int) -> [Int: String] {
+            var result: [Int: String] = [:]
+            for (key, value) in raw {
+                guard let index = Int(key), index >= 0, index < count,
+                      let uid = MixerRoutingSupport.sanitizedDeviceUID(value) else { continue }
+                result[index] = uid
+            }
+            return result
+        }
+    }
+
     /// Where a device goes in a priority list that has not ranked it yet.
     /// Virtual and aggregate devices play or record nothing on their own, so
     /// they never take the place of hardware.
