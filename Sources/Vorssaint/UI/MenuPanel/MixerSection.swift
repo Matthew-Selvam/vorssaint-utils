@@ -72,8 +72,12 @@ struct MixerSection: View {
     }
 
     private var screenFittedSliderCount: Int {
-        let screenHeight = (PanelInteractionState.shared.anchorScreen ?? NSScreen.withMenuBar)?
-            .visibleFrame.height ?? 760
+        // The same attachment check MenuPanelView makes: a screen the user has
+        // unplugged must not decide the ceiling, or the rows and the panel
+        // would measure themselves against different displays.
+        let anchored = PanelInteractionState.shared.anchorScreen
+            .flatMap { $0.isStillAttached ? $0 : nil }
+        let screenHeight = (anchored ?? NSScreen.withMenuBar)?.visibleFrame.height ?? 760
         // The same budget the panel measures against: its chrome plus an
         // estimate of the mixer's own rows. What is left belongs to the
         // sliders, so the panel cannot be pushed past the menu bar.
@@ -130,9 +134,9 @@ struct MixerSection: View {
             ForEach(mixer.outputSliders) { slider in
                 outputSliderRow(slider)
             }
-            if universalOutputDevices.isEmpty {
-                inputMessage(l10n.s.mixerSystemOutputNoDevices, systemImage: "speaker.slash")
-            }
+            // The no-outputs notice belongs to row 0's picker, which is always
+            // present and already says it. Repeating it here would show the
+            // same line once per slider.
         }
     }
 
@@ -335,8 +339,8 @@ struct MixerSection: View {
     private var outputSliderCountBinding: Binding<Int> {
         Binding(
             get: {
-                Defaults.sanitizedMixerOutputSliderCount(
-                    mixer.requestedOutputSliderCount,
+                MixerRoutingSupport.MixerOutputSliders.displayedCount(
+                    stored: mixer.requestedOutputSliderCount,
                     maximumCount: sliderCountCeiling)
             },
             set: { mixer.requestOutputSliderCount($0) }

@@ -2554,21 +2554,6 @@ enum Defaults {
         MixerRoutingSupport.sanitizedDeviceUID(value)
     }
 
-    /// The number of system volume sliders the mixer shows, held to what the
-    /// current screen can fit. `maximumCount` comes from the panel, which knows
-    /// the display the menu bar icon is on.
-    static func sanitizedMixerOutputSliderCount(_ count: Int,
-                                                maximumCount: Int) -> Int {
-        MixerRoutingSupport.MixerOutputSliders.sanitizedCount(count,
-                                                             maximumCount: maximumCount)
-    }
-
-    /// The per-slider output assignment, trimmed to the rows that are on screen.
-    static func sanitizedMixerOutputSliderDevices(_ raw: [String: Any],
-                                                  count: Int) -> [Int: String] {
-        MixerRoutingSupport.MixerOutputSliders.sanitizedStoredUIDs(raw, count: count)
-    }
-
     static func sanitizedAppOutputDevices(_ raw: [String: Any]) -> [String: String] {
         MixerRoutingSupport.sanitizedRouteMap(raw)
     }

@@ -65,16 +65,12 @@ struct MixerOutputSlider: Identifiable, Equatable {
     let index: Int
     /// Nil when the row follows the system default.
     let deviceUID: String?
-    let deviceName: String
     /// Nil when the device exposes no software volume control, which is why
     /// the row then shows no slider rather than one that does nothing.
     var volume: Double?
     var muted: Bool?
 
     var id: Int { index }
-
-    /// The device's own level is editable only when it has one.
-    var isAdjustable: Bool { volume != nil }
 }
 
 /// Per-app volume control, something macOS does not offer natively.
@@ -756,14 +752,6 @@ final class AppVolumeMixer: ObservableObject {
         return true
     }
 
-    @discardableResult
-    func setOutputSliderMuted(_ muted: Bool, at index: Int) -> Bool {
-        guard let device = outputDeviceID(forSliderAt: index) else { return false }
-        let applied = Self.setOutputMuted(muted, for: device)
-        applyOutputSlider(at: index)
-        return applied
-    }
-
     /// Points a row at an output, or back at the system default with nil. The
     /// choice is remembered per row, so two rows can sit on two outputs and
     /// each keeps its own level.
@@ -792,11 +780,13 @@ final class AppVolumeMixer: ObservableObject {
     /// than fits leaves the mixer with what fits rather than overflowing.
     @discardableResult
     func requestOutputSliderCount(_ count: Int) -> Int {
-        let clamped = Defaults.sanitizedMixerOutputSliderCount(
+        // The one place the stored count is written: the user asked for this.
+        let clamped = MixerRoutingSupport.MixerOutputSliders.storeCount(
             count,
             maximumCount: maximumOutputSliderCount
-                ?? MixerRoutingSupport.MixerOutputSliders.hardMaximumCount)
-        UserDefaults.standard.set(clamped, forKey: DefaultsKey.mixerOutputSliderCount)
+                ?? MixerRoutingSupport.MixerOutputSliders.hardMaximumCount,
+            defaults: .standard,
+            key: DefaultsKey.mixerOutputSliderCount)
         applyRequestedSliderCount()
         return clamped
     }
@@ -817,30 +807,35 @@ final class AppVolumeMixer: ObservableObject {
     /// preference is the source of truth; `requestedOutputSliderCount` is only
     /// ever its clamped form, so reading either gives the same answer.
     private var effectiveSliderCount: Int {
-        Defaults.sanitizedMixerOutputSliderCount(
-            UserDefaults.standard.integer(forKey: DefaultsKey.mixerOutputSliderCount),
+        MixerRoutingSupport.MixerOutputSliders.displayedCount(
+            stored: UserDefaults.standard.integer(forKey: DefaultsKey.mixerOutputSliderCount),
             maximumCount: maximumOutputSliderCount
                 ?? MixerRoutingSupport.MixerOutputSliders.hardMaximumCount)
     }
 
-    /// Brings the stored count in line with this screen and republishes the
-    /// rows. Writing the clamped value back keeps Settings and the panel
-    /// reading the same number, and a display change is then reflected the
-    /// next time either opens.
+    /// Publishes the count this screen allows, without touching the stored
+    /// preference. Clamping on read is what keeps the rows on screen; writing
+    /// the clamped number back would make the ceiling permanent, so a count
+    /// set on a large display would be lost for good the moment the menu bar
+    /// icon moved to a smaller one. The stored value stays what the user
+    /// asked for and comes back with the display.
     private func applyRequestedSliderCount() {
         let count = effectiveSliderCount
         if requestedOutputSliderCount != count { requestedOutputSliderCount = count }
-        let stored = UserDefaults.standard.integer(forKey: DefaultsKey.mixerOutputSliderCount)
-        if stored != count {
-            UserDefaults.standard.set(count, forKey: DefaultsKey.mixerOutputSliderCount)
-        }
         rebuildOutputSliders()
     }
 
+    /// The per-row assignment, trimmed to the rows currently on screen. The
+    /// trim is written back by the shared helper, so a row the user can no
+    /// longer see is one they can no longer correct.
     private func storedOutputSliderDevices() -> [Int: String] {
         let raw = UserDefaults.standard.dictionary(forKey: DefaultsKey.mixerOutputSliderDevices)
             ?? [:]
-        return Defaults.sanitizedMixerOutputSliderDevices(raw, count: effectiveSliderCount)
+        return MixerRoutingSupport.MixerOutputSliders.persistedDeviceUIDs(
+            raw,
+            count: effectiveSliderCount,
+            defaults: .standard,
+            key: DefaultsKey.mixerOutputSliderDevices)
     }
 
     /// Rebuilds every row from the stored assignment and what the HAL reports
@@ -852,15 +847,10 @@ final class AppVolumeMixer: ObservableObject {
         let uids = MixerRoutingSupport.MixerOutputSliders.resolvedDeviceUIDs(
             storedUIDs: stored,
             count: count,
-            availableUIDs: Set(outputDevices.map(\.uid)),
-            defaultUID: currentOutputDeviceUID)
-        let names = outputDevices.reduce(into: [String: String]()) { result, device in
-            result[device.uid] = device.name
-        }
+            availableUIDs: Set(outputDevices.map(\.uid)))
         let next = uids.enumerated().map { index, uid in
             MixerOutputSlider(index: index,
                               deviceUID: uid,
-                              deviceName: uid.flatMap { names[$0] } ?? "",
                               volume: nil,
                               muted: nil)
         }

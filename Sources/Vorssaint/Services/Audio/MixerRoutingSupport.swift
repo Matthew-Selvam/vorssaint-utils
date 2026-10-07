@@ -651,10 +651,11 @@ enum MixerRoutingSupport {
         /// A row the user never assigned, or whose device has since gone,
         /// falls back to the system default rather than vanishing: a slider
         /// that disappears with the device takes the volume control with it.
+        /// Following the default is expressed by nil, which is what every
+        /// caller resolves to the default device's own level.
         static func resolvedDeviceUIDs(storedUIDs: [Int: String],
                                        count: Int,
-                                       availableUIDs: Set<String>,
-                                       defaultUID: String?) -> [String?] {
+                                       availableUIDs: Set<String>) -> [String?] {
             (0..<max(minimumCount, count)).map { index in
                 guard let uid = storedUIDs[index],
                       availableUIDs.contains(uid) else { return nil }
@@ -676,6 +677,50 @@ enum MixerRoutingSupport {
                 result[index] = uid
             }
             return result
+        }
+
+        /// The assignment as it is kept on disk, with the rows that are no longer
+        /// on screen dropped.
+        ///
+        /// This is where the trim becomes real. The pure sanitizer above says
+        /// what a given count implies; this writes the result back, so a row
+        /// the user can no longer see is one they can no longer correct and
+        /// growing the count again cannot silently restore it.
+        static func persistedDeviceUIDs(_ raw: [String: Any],
+                                         count: Int,
+                                         defaults: UserDefaults,
+                                         key: String) -> [Int: String] {
+            let sanitized = sanitizedStoredUIDs(raw, count: count)
+            let trimmed = Dictionary(uniqueKeysWithValues: sanitized.map { (String($0.key), $0.value) })
+            // A dictionary of Any is not directly comparable, so the round trip
+            // is compared by its contents: same keys, same strings, nothing
+            // left over.
+            let differs = trimmed.count != raw.count
+                || trimmed.contains { key, value in (raw[key] as? String) != value }
+            if differs { defaults.set(trimmed, forKey: key) }
+            return sanitized
+        }
+
+        /// The count the mixer runs with on this screen: the stored choice,
+        /// held to what fits. Reading never writes, so a count set on a large
+        /// display comes back with it when the menu bar icon returns there.
+        static func displayedCount(stored: Int, maximumCount: Int) -> Int {
+            sanitizedCount(stored, maximumCount: maximumCount)
+        }
+
+        /// Records an explicit request from the user. This is the only place
+        /// the count is written, so measuring a screen can never quietly
+        /// replace what was asked for.
+        @discardableResult
+        static func storeCount(_ count: Int,
+                               maximumCount: Int,
+                               defaults: UserDefaults,
+                               key: String) -> Int {
+            let clamped = sanitizedCount(count, maximumCount: maximumCount)
+            if defaults.integer(forKey: key) != clamped {
+                defaults.set(clamped, forKey: key)
+            }
+            return clamped
         }
     }
 

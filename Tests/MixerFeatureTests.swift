@@ -1329,8 +1329,7 @@ enum MixerFeatureTests {
         // Each row keeps its own output, and the rows are read independently.
         let resolved = sliders.resolvedDeviceUIDs(storedUIDs: [1: "speakers"],
                                                    count: 3,
-                                                   availableUIDs: ["speakers", "headphones"],
-                                                   defaultUID: "built-in")
+                                                   availableUIDs: ["speakers", "headphones"])
         suite.expect(resolved.count == 3,
                "the resolved assignment always has one entry per row")
         suite.expect(resolved[0] == nil,
@@ -1343,8 +1342,7 @@ enum MixerFeatureTests {
         // A device that has gone must not take the row with it.
         let missing = sliders.resolvedDeviceUIDs(storedUIDs: [1: "unplugged"],
                                                   count: 2,
-                                                  availableUIDs: ["speakers"],
-                                                  defaultUID: "built-in")
+                                                  availableUIDs: ["speakers"])
         suite.expect(missing[1] == nil,
                "a row whose device has gone falls back to the default instead of disappearing")
 
@@ -1373,5 +1371,82 @@ enum MixerFeatureTests {
                                                  maximumCount: sliders.hardMaximumCount) == count,
                    "a count inside the range is kept as asked (\(count))")
         }
+
+        // MARK: Slider preferences as they are persisted
+        //
+        // The first version of these tests covered only the pure helpers, and
+        // three defects shipped green behind them: nothing checked that the
+        // shrink was written back, or that measuring a screen left the stored
+        // count alone. These drive the same functions the mixer calls, with a
+        // real defaults store, so a regression in the persistence itself fails
+        // here instead of only on a user's Mac.
+        let defaults = UserDefaults.standard
+        let countKey = DefaultsKey.mixerOutputSliderCount
+        let devicesKey = DefaultsKey.mixerOutputSliderDevices
+        let savedCount = defaults.object(forKey: countKey)
+        let savedDevices = defaults.object(forKey: devicesKey)
+        defer {
+            if let savedCount { defaults.set(savedCount, forKey: countKey) }
+            else { defaults.removeObject(forKey: countKey) }
+            if let savedDevices { defaults.set(savedDevices, forKey: devicesKey) }
+            else { defaults.removeObject(forKey: devicesKey) }
+        }
+        let storedCount = { defaults.integer(forKey: countKey) }
+        let storedDevices = { defaults.dictionary(forKey: devicesKey) ?? [:] }
+
+        // Shrinking the count has to survive on disk. A row the user can no
+        // longer see is one they can no longer correct, so growing the count
+        // back must not silently restore a route they never saw again.
+        defaults.set(3, forKey: countKey)
+        defaults.set(["0": "speakers", "1": "headphones", "2": "display"], forKey: devicesKey)
+        let trimmedOnShrink = sliders.persistedDeviceUIDs(storedDevices(),
+                                                           count: 1,
+                                                           defaults: defaults,
+                                                           key: devicesKey)
+        suite.expect(trimmedOnShrink == [0: "speakers"],
+               "shrinking drops the hidden rows")
+        suite.expect(storedDevices().count == 1,
+               "the drop is written back, not just returned, got \(storedDevices())")
+
+        defaults.set(3, forKey: countKey)
+        let grownBack = sliders.persistedDeviceUIDs(storedDevices(),
+                                                     count: 3,
+                                                     defaults: defaults,
+                                                     key: devicesKey)
+        suite.expect(grownBack == [0: "speakers"],
+               "growing the count back does not resurrect a hidden route, got \(grownBack)")
+
+        // Reconnecting a device restores the row rather than resetting it, so
+        // the stored route outlives a disconnection.
+        defaults.set(1, forKey: countKey)
+        defaults.set(["0": "speakers"], forKey: devicesKey)
+        _ = sliders.persistedDeviceUIDs(storedDevices(), count: 1,
+                                         defaults: defaults, key: devicesKey)
+        suite.expect((storedDevices()["0"] as? String) == "speakers",
+               "a row inside the count is left alone")
+
+        // Measuring a smaller screen shows fewer sliders but never rewrites
+        // what the user chose, so a count set on a large display comes back
+        // with it. Writing the clamp back lost the setting for good.
+        defaults.set(12, forKey: countKey)
+        suite.expect(sliders.displayedCount(stored: storedCount(), maximumCount: 8) == 8,
+               "a small screen shows only what fits")
+        suite.expect(storedCount() == 12,
+               "reading the count for a screen does not overwrite the stored choice")
+        // The same read on the display it was set for still shows all twelve.
+        suite.expect(sliders.displayedCount(stored: storedCount(), maximumCount: 12) == 12,
+               "the stored count returns on a display that fits it")
+
+        // An explicit request is the one thing that writes.
+        let accepted = sliders.storeCount(5, maximumCount: 8,
+                                          defaults: defaults, key: countKey)
+        suite.expect(accepted == 5, "a request inside the ceiling is accepted")
+        suite.expect(storedCount() == 5, "an explicit request is persisted")
+        let tooMany = sliders.storeCount(40, maximumCount: 8,
+                                         defaults: defaults, key: countKey)
+        suite.expect(tooMany == 8,
+               "a request past the screen ceiling is capped, got \(tooMany)")
+        suite.expect(storedCount() == 8,
+               "the capped request is what gets stored, got \(storedCount())")
     }
 }
